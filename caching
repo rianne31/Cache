@@ -1,0 +1,429 @@
+MainActivity.java
+package com.example.caching;
+
+
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.os.Handler;
+import android.view.View;
+import android.widget.Button;
+import android.widget.TextView;
+import android.widget.Toast;
+import android.widget.Switch;
+import android.widget.CompoundButton;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.work.Constraints;
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+
+import java.io.File;
+import java.util.concurrent.TimeUnit;
+
+public class MainActivity extends AppCompatActivity {
+
+    private TextView statusText;
+    private TextView cacheSizeText;
+    private Button clearCacheButton;
+    private Switch autoCleanSwitch;
+    private static final String WORK_TAG = "periodic_cache_cleaner";
+    private static final String PREFS_NAME = "CacheCleanerPrefs";
+    private static final String AUTO_CLEAN_KEY = "auto_clean_enabled";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // Initialize UI components
+        statusText = findViewById(R.id.statusText);
+        cacheSizeText = findViewById(R.id.cacheSizeText);
+        clearCacheButton = findViewById(R.id.clearCacheButton);
+        autoCleanSwitch = findViewById(R.id.autoCleanSwitch);
+
+        // Set button click listener
+        clearCacheButton.setOnClickListener(view -> showConfirmationDialog());
+
+        // Set switch listener
+        autoCleanSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                saveAutoCleanPreference(isChecked);
+
+                if (isChecked) {
+                    schedulePeriodicCacheCleaning();
+                    Toast.makeText(MainActivity.this, "Automatic cache cleaning enabled", Toast.LENGTH_SHORT).show();
+                } else {
+                    cancelPeriodicCacheCleaning();
+                    Toast.makeText(MainActivity.this, "Automatic cache cleaning disabled", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
+        // Load saved preference
+        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+        boolean autoCleanEnabled = settings.getBoolean(AUTO_CLEAN_KEY, false);
+        autoCleanSwitch.setChecked(autoCleanEnabled);
+
+        // Initialize the cache status and size display
+        updateCacheInfo();
+    }
+
+    private void saveAutoCleanPreference(boolean enabled) {
+        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+        SharedPreferences.Editor editor = settings.edit();
+        editor.putBoolean(AUTO_CLEAN_KEY, enabled);
+        editor.apply();
+    }
+
+    private void showConfirmationDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Clear Cache")
+                .setMessage("Are you sure you want to clear the application cache?")
+                .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        clearCache();
+                    }
+                })
+                .setNegativeButton("No", null)
+                .show();
+    }
+
+    private void clearCache() {
+        try {
+            // Get the app's cache directory
+            File cacheDir = getCacheDir();
+
+            // Store the original size for comparison
+            long originalSize = calculateDirectorySize(cacheDir);
+
+            // Delete all files in the cache directory
+            deleteRecursive(cacheDir);
+
+            // Update the UI with a success message
+            updateCacheInfo();
+
+            // Show difference in toast
+            Toast.makeText(this, "Freed " + formatSize(originalSize) + " of cache", Toast.LENGTH_LONG).show();
+
+        } catch (Exception e) {
+            // Handle any errors
+            statusText.setText("Failed to Clear Cache!");
+            Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void deleteRecursive(File fileOrDirectory) {
+        if (fileOrDirectory.isDirectory()) {
+            File[] files = fileOrDirectory.listFiles();
+            if (files != null) {
+                for (File child : files) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        fileOrDirectory.delete();
+    }
+
+    private void updateCacheInfo() {
+        // Check if cache exists and display status
+        File cacheDir = getCacheDir();
+
+        if (cacheDir.exists()) {
+            long size = calculateDirectorySize(cacheDir);
+            cacheSizeText.setText("Cache Size: " + formatSize(size));
+
+            if (size > 0) {
+                statusText.setText("Cache Status: Present");
+            } else {
+                statusText.setText("Cache Status: Empty");
+            }
+        } else {
+            statusText.setText("Cache Status: No cache directory found");
+            cacheSizeText.setText("Cache Size: 0 B");
+        }
+    }
+
+    private long calculateDirectorySize(File directory) {
+        long size = 0;
+
+        if (directory.isDirectory()) {
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isFile()) {
+                        size += file.length();
+                    } else {
+                        size += calculateDirectorySize(file);
+                    }
+                }
+            }
+        }
+
+        return size;
+    }
+
+    private String formatSize(long size) {
+        final String[] units = new String[] { "B", "KB", "MB", "GB", "TB" };
+        int digitGroups = (int) (Math.log10(size) / Math.log10(1024));
+
+        if (size == 0) return "0 B";
+
+        // Cap at TB level
+        digitGroups = Math.min(digitGroups, 4);
+
+        return String.format("%.2f %s", size / Math.pow(1024, digitGroups), units[digitGroups]);
+    }
+
+    private void schedulePeriodicCacheCleaning() {
+        // Cancel any existing work
+        cancelPeriodicCacheCleaning();
+
+        // Create constraints - only run when device is idle and charging
+        Constraints constraints = new Constraints.Builder()
+                .setRequiresDeviceIdle(true)
+                .setRequiresCharging(true)
+                .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                .build();
+
+        // Create work request - clean cache every 24 hours
+        PeriodicWorkRequest cacheCleanRequest =
+                new PeriodicWorkRequest.Builder(CacheCleanWorker.class, 24, TimeUnit.HOURS)
+                        .setConstraints(constraints)
+                        .build();
+
+        // Enqueue the work
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                WORK_TAG,
+                ExistingPeriodicWorkPolicy.REPLACE,
+                cacheCleanRequest);
+    }
+
+    private void cancelPeriodicCacheCleaning() {
+        WorkManager.getInstance(this).cancelUniqueWork(WORK_TAG);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Refresh cache information when activity becomes visible
+        updateCacheInfo();
+    }
+}
+
+CacheCleanWorker.java
+package com.example.caching;
+
+package com.example.cacheclearer;
+
+import android.content.Context;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.work.Worker;
+import androidx.work.WorkerParameters;
+
+import java.io.File;
+
+public class CacheCleanWorker extends Worker {
+    private static final String TAG = "CacheCleanWorker";
+
+    public CacheCleanWorker(@NonNull Context context, @NonNull WorkerParameters params) {
+        super(context, params);
+    }
+
+    @Override
+    public Result doWork() {
+        try {
+            Context context = getApplicationContext();
+            File cacheDir = context.getCacheDir();
+
+            // Calculate cache size before cleaning
+            long sizeBefore = calculateDirectorySize(cacheDir);
+
+            // Delete cache files
+            deleteRecursive(cacheDir);
+
+            Log.i(TAG, "Automatic cache cleaning completed. Cleared " + formatSize(sizeBefore));
+            return Result.success();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to clean cache: " + e.getMessage());
+            return Result.failure();
+        }
+    }
+
+    private void deleteRecursive(File fileOrDirectory) {
+        if (fileOrDirectory.isDirectory()) {
+            File[] files = fileOrDirectory.listFiles();
+            if (files != null) {
+                for (File child : files) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        fileOrDirectory.delete();
+    }
+
+    private long calculateDirectorySize(File directory) {
+        long size = 0;
+
+        if (directory.isDirectory()) {
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isFile()) {
+                        size += file.length();
+                    } else {
+                        size += calculateDirectorySize(file);
+                    }
+                }
+            }
+        }
+
+        return size;
+    }
+
+    private String formatSize(long size) {
+        final String[] units = new String[] { "B", "KB", "MB", "GB", "TB" };
+        int digitGroups = (int) (Math.log10(size) / Math.log10(1024));
+
+        // Handle zero size
+        if (size == 0) return "0 B";
+
+        // Cap at TB level
+        digitGroups = Math.min(digitGroups, 4);
+
+        return String.format("%.2f %s", size / Math.pow(1024, digitGroups), units[digitGroups]);
+    }
+}
+
+activity_main.xml
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <TextView
+        android:id="@+id/titleText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Cache Cleaner"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginTop="50dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Cache Status Card -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/statusCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="16dp"
+        app:cardCornerRadius="8dp"
+        app:cardElevation="4dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/titleText">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Status TextView -->
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cache Status: Checking..."
+                android:textSize="18sp"
+                android:layout_marginBottom="8dp" />
+
+            <!-- Cache Size TextView -->
+            <TextView
+                android:id="@+id/cacheSizeText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cache Size: Calculating..."
+                android:textSize="18sp" />
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <!-- Button to clear cache -->
+    <Button
+        android:id="@+id/clearCacheButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Clear Cache Now"
+        android:textAllCaps="false"
+        android:padding="12dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="24dp"
+        app:layout_constraintTop_toBottomOf="@id/statusCard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Auto Clean Option -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/settingsCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="16dp"
+        app:cardCornerRadius="8dp"
+        app:cardElevation="4dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/clearCacheButton">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Settings"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="16dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Automatically clean cache daily"
+                    android:textSize="16sp" />
+
+                <Switch
+                    android:id="@+id/autoCleanSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="When enabled, cache will be cleane
