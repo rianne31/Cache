@@ -1,0 +1,384 @@
+MainActivity.java
+package com.example.memorymanager;
+
+import android.app.ActivityManager;
+import android.content.Context;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.View;
+import android.widget.Button;
+import android.widget.ProgressBar;
+import android.widget.Switch;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.appcompat.app.AppCompatActivity;
+import java.text.DecimalFormat;
+import java.util.Locale;
+
+public class MainActivity extends AppCompatActivity {
+
+    private TextView memoryUsageText;
+    private TextView totalMemoryText;
+    private TextView availableMemoryText;
+    private TextView thresholdText;
+    private TextView appMemoryText;
+    private ProgressBar memoryProgressBar;
+    private Button refreshButton;
+    private Button cleanMemoryButton;
+    private Switch autoRefreshSwitch;
+    
+    private Handler autoRefreshHandler;
+    private Runnable autoRefreshRunnable;
+    private boolean isAutoRefreshEnabled = false;
+    private static final int REFRESH_INTERVAL = 2000; // 2 seconds
+    private static final int WARNING_THRESHOLD = 75; // 75% usage as warning threshold
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // Initialize the views
+        initializeViews();
+        
+        // Set click listeners
+        setupClickListeners();
+        
+        // Set up auto refresh handler and runnable
+        setupAutoRefresh();
+        
+        // Initial memory usage update
+        updateMemoryUsage();
+    }
+    
+    private void initializeViews() {
+        memoryUsageText = findViewById(R.id.memoryUsageText);
+        totalMemoryText = findViewById(R.id.totalMemoryText);
+        availableMemoryText = findViewById(R.id.availableMemoryText);
+        thresholdText = findViewById(R.id.thresholdText);
+        appMemoryText = findViewById(R.id.appMemoryText);
+        memoryProgressBar = findViewById(R.id.memoryProgressBar);
+        refreshButton = findViewById(R.id.refreshButton);
+        cleanMemoryButton = findViewById(R.id.cleanMemoryButton);
+        autoRefreshSwitch = findViewById(R.id.autoRefreshSwitch);
+    }
+    
+    private void setupClickListeners() {
+        // Set the click listener for the refresh button
+        refreshButton.setOnClickListener(view -> updateMemoryUsage());
+        
+        // Set the click listener for the clean memory button
+        cleanMemoryButton.setOnClickListener(view -> cleanMemory());
+        
+        // Set the change listener for the auto refresh switch
+        autoRefreshSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            isAutoRefreshEnabled = isChecked;
+            if (isAutoRefreshEnabled) {
+                startAutoRefresh();
+                Toast.makeText(MainActivity.this, "Auto refresh enabled", Toast.LENGTH_SHORT).show();
+            } else {
+                stopAutoRefresh();
+                Toast.makeText(MainActivity.this, "Auto refresh disabled", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+    
+    private void setupAutoRefresh() {
+        autoRefreshHandler = new Handler(Looper.getMainLooper());
+        autoRefreshRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (isAutoRefreshEnabled) {
+                    updateMemoryUsage();
+                    autoRefreshHandler.postDelayed(this, REFRESH_INTERVAL);
+                }
+            }
+        };
+    }
+    
+    private void startAutoRefresh() {
+        autoRefreshHandler.postDelayed(autoRefreshRunnable, REFRESH_INTERVAL);
+    }
+    
+    private void stopAutoRefresh() {
+        autoRefreshHandler.removeCallbacks(autoRefreshRunnable);
+    }
+
+    private void updateMemoryUsage() {
+        // Get the Activity Manager to retrieve system memory details
+        ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+
+        if (activityManager != null) {
+            ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
+            activityManager.getMemoryInfo(memoryInfo);
+
+            // Get the memory details (in bytes)
+            long totalMemory = memoryInfo.totalMem;
+            long availableMemory = memoryInfo.availMem;
+            long usedMemory = totalMemory - availableMemory;
+            double memoryUsagePercent = ((double) usedMemory / totalMemory) * 100;
+            
+            // Format memory sizes to MB for better readability
+            String totalMemoryFormatted = formatSize(totalMemory);
+            String availableMemoryFormatted = formatSize(availableMemory);
+            String usedMemoryFormatted = formatSize(usedMemory);
+            
+            // Get current app memory usage
+            Runtime runtime = Runtime.getRuntime();
+            long appMemoryUsage = runtime.totalMemory() - runtime.freeMemory();
+            String appMemoryFormatted = formatSize(appMemoryUsage);
+
+            // Update the TextViews with memory information
+            DecimalFormat df = new DecimalFormat("#.##");
+            memoryUsageText.setText(String.format("Memory Usage: %s%%", df.format(memoryUsagePercent)));
+            totalMemoryText.setText(String.format("Total Memory: %s", totalMemoryFormatted));
+            availableMemoryText.setText(String.format("Available Memory: %s", availableMemoryFormatted));
+            appMemoryText.setText(String.format("App Memory Usage: %s", appMemoryFormatted));
+            
+            // Update progress bar
+            memoryProgressBar.setProgress((int) memoryUsagePercent);
+            
+            // Check if memory usage is above threshold
+            if (memoryUsagePercent > WARNING_THRESHOLD) {
+                thresholdText.setVisibility(View.VISIBLE);
+                thresholdText.setText("Warning: High Memory Usage!");
+                thresholdText.setTextColor(Color.RED);
+                memoryUsageText.setTextColor(Color.RED);
+            } else {
+                thresholdText.setVisibility(View.GONE);
+                memoryUsageText.setTextColor(Color.BLACK);
+            }
+        }
+    }
+    
+    private void cleanMemory() {
+        // This is a simplified demonstration of memory cleaning
+        // In real applications, more sophisticated memory management would be needed
+        
+        // Force garbage collection
+        System.gc();
+        
+        // Show feedback to user
+        Toast.makeText(this, "Memory cleanup requested", Toast.LENGTH_SHORT).show();
+        
+        // Update memory usage after cleanup attempt
+        updateMemoryUsage();
+    }
+    
+    private String formatSize(long size) {
+        // Convert bytes to MB for better readability
+        double sizeInMB = size / (1024.0 * 1024.0);
+        return String.format(Locale.getDefault(), "%.2f MB", sizeInMB);
+    }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Make sure to stop the auto refresh when the activity is destroyed
+        stopAutoRefresh();
+    }
+}
+
+
+activity_main.xml
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    tools:context=".MainActivity">
+
+    <TextView
+        android:id="@+id/titleText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Memory Manager"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <androidx.cardview.widget.CardView
+        android:id="@+id/memoryCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        app:cardCornerRadius="8dp"
+        app:cardElevation="4dp"
+        app:layout_constraintTop_toBottomOf="@id/titleText"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/memoryUsageText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Memory Usage: Calculating..."
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:layout_gravity="center_horizontal" />
+
+            <ProgressBar
+                android:id="@+id/memoryProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:max="100"
+                android:progress="0" />
+
+            <TextView
+                android:id="@+id/thresholdText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Warning: High Memory Usage!"
+                android:textColor="#FF0000"
+                android:textSize="16sp"
+                android:visibility="gone"
+                android:layout_marginTop="8dp"
+                android:layout_gravity="center_horizontal" />
+
+            <TextView
+                android:id="@+id/totalMemoryText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Total Memory: Calculating..."
+                android:textSize="16sp"
+                android:layout_marginTop="16dp" />
+
+            <TextView
+                android:id="@+id/availableMemoryText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Available Memory: Calculating..."
+                android:textSize="16sp"
+                android:layout_marginTop="8dp" />
+
+            <TextView
+                android:id="@+id/appMemoryText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="App Memory Usage: Calculating..."
+                android:textSize="16sp"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <androidx.cardview.widget.CardView
+        android:id="@+id/controlsCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        app:cardCornerRadius="8dp"
+        app:cardElevation="4dp"
+        app:layout_constraintTop_toBottomOf="@id/memoryCard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Controls"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="16dp">
+
+                <Button
+                    android:id="@+id/refreshButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Refresh"
+                    android:layout_marginEnd="8dp" />
+
+                <Button
+                    android:id="@+id/cleanMemoryButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Clean Memory"
+                    android:layout_marginStart="8dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="16dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Auto Refresh (2s)"
+                    android:textSize="16sp" />
+
+                <Switch
+                    android:id="@+id/autoRefreshSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <TextView
+        android:id="@+id/footerText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Memory monitoring is approximate and system-dependent"
+        android:textSize="12sp"
+        android:textStyle="italic"
+        android:layout_marginBottom="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
+
+style.xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme -->
+    <style name="AppTheme" parent="Theme.MaterialComponents.Light.DarkActionBar">
+        <!-- Primary brand color -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <!-- Material design attributes -->
+        <item name="materialButtonStyle">@style/AppButton</item>
+        <item name="cardViewStyle">@style/AppCardView</item>
+    </style>
+
+    <!-- Custom button style -->
+    <style name="AppButton" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">8dp</item>
+    </style>
+
+    <!-- Custom card view style -->
+    <style name="AppCardView" parent="Widget.MaterialComponents.CardView">
+        <item name="cardCornerRadius">8dp</item
